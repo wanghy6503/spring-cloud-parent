@@ -1,0 +1,5 @@
+# AutoConfiguration
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+com.github.jojotech.spring.cloud.commons.auto.LoadBalancerAutoConfiguration,\
+com.github.jojotech.spring.cloud.commons.auto.Log4j2AutoConfiguration,\
+com.github.jojotech.spring.cloud.commons.auto.SchedulingAutoConfiguration
