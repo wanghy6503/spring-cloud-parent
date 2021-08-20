@@ -6,6 +6,19 @@
 
 Eureka 客户端配置就是访问 Eureka Server 的客户端相关配置，包括 Eureka Server 地址的配置，拉取服务实例信息相关配置，当前实例注册相关配置和 http 连接相关配置。在 Spring Cloud 中，Eureka 客户端配置以 `eureka.client` 开头，对应配置类为 [`EurekaClientConfigBean`](https://github.com/spring-cloud/spring-cloud-netflix/blob/main/spring-cloud-netflix-eureka-client/src/main/java/org/springframework/cloud/netflix/eureka/EurekaClientConfigBean.java)
 
+其中，Eureka 客户端有三个比较重要的定时任务，以及相关配置，这里用图的方式给大家展示出来了：
+
+**读取服务实例相关流程**：
+![image](https://zhxhash-blog.oss-cn-beijing.aliyuncs.com/Spring%20Cloud%20%E5%8D%87%E7%BA%A7%E4%B9%8B%E8%B7%AF/2020.x/eureka_client_cache_refresh_thread.png)
+
+**定时检查实例信息以及实例状态并同步到 Eureka Server**：
+
+![image](https://zhxhash-blog.oss-cn-beijing.aliyuncs.com/Spring%20Cloud%20%E5%8D%87%E7%BA%A7%E4%B9%8B%E8%B7%AF/2020.x/eureka_client_instance_replicate_task.png)
+
+**定时心跳相关流程**：
+
+![image](https://zhxhash-blog.oss-cn-beijing.aliyuncs.com/Spring%20Cloud%20%E5%8D%87%E7%BA%A7%E4%B9%8B%E8%B7%AF/2020.x/eureka_client_heartbeatTask.png)
+
 ![image](https://zhxhash-blog.oss-cn-beijing.aliyuncs.com/Spring%20Cloud%20%E5%8D%87%E7%BA%A7%E4%B9%8B%E8%B7%AF/2020.x/18-02.Eureka%20Client%20%E9%85%8D%E7%BD%AE%20-%20Eureka%20Server%20%E5%9C%B0%E5%9D%80%E9%85%8D%E7%BD%AE.jpg)
 
 可以直接指定 Eureka Server 的地址，并且，这些配置可以动态修改，并且可以配置刷新时间。例如：
