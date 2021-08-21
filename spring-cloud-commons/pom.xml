@@ -37,11 +37,6 @@
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-spring-cloud2</artifactId>
         </dependency>
-        <!--暴露actuator相关端口-->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
         <!--prometheus监控-->
         <dependency>
             <groupId>io.micrometer</groupId>
