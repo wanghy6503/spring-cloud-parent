@@ -35,10 +35,6 @@ public class WebClientConfigurationProperties {
          */
         private List<String> retryablePaths;
         /**
-         * 最大连接数量
-         */
-        private int maxConnection = 50;
-        /**
          * 连接超时
          */
         private Duration connectTimeout = Duration.ofMillis(500);
