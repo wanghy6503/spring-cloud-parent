@@ -3,6 +3,7 @@ package com.github.jojotech.spring.cloud.webmvc.feign;
 import brave.Span;
 import brave.Tracer;
 import com.alibaba.fastjson.JSON;
+import com.github.jojotech.spring.cloud.commons.metric.ServiceInstanceMetrics;
 import com.github.jojotech.spring.cloud.webmvc.misc.SpecialHttpStatus;
 import feign.Client;
 import feign.Request;
@@ -15,6 +16,9 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.core.ConfigurationNotFoundException;
 import io.vavr.control.Try;
 import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.cloud.client.DefaultServiceInstance;
+import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.openfeign.FeignClient;
 
 import java.io.IOException;
@@ -26,6 +30,7 @@ import java.util.function.Supplier;
 
 @Slf4j
 public class Resilience4jFeignClient implements Client {
+    private final ServiceInstanceMetrics serviceInstanceMetrics;
     private final ThreadPoolBulkheadRegistry threadPoolBulkheadRegistry;
     private final CircuitBreakerRegistry circuitBreakerRegistry;
     private final Tracer tracer;
@@ -33,11 +38,12 @@ public class Resilience4jFeignClient implements Client {
 
 
     public Resilience4jFeignClient(
-            ApacheHttpClient apacheHttpClient,
+            ServiceInstanceMetrics serviceInstanceMetrics, ApacheHttpClient apacheHttpClient,
             ThreadPoolBulkheadRegistry threadPoolBulkheadRegistry,
             CircuitBreakerRegistry circuitBreakerRegistry,
             Tracer tracer
     ) {
+        this.serviceInstanceMetrics = serviceInstanceMetrics;
         this.apacheHttpClient = apacheHttpClient;
         this.threadPoolBulkheadRegistry = threadPoolBulkheadRegistry;
         this.circuitBreakerRegistry = circuitBreakerRegistry;
@@ -91,10 +97,14 @@ public class Resilience4jFeignClient implements Client {
                     }
                 })
         );
-
+        ServiceInstance serviceInstance = getServiceInstance(request);
         try {
-            return Try.ofSupplier(completionStageSupplier).get().toCompletableFuture().join();
+            serviceInstanceMetrics.recordServiceInstanceCall(serviceInstance);
+            Response response = Try.ofSupplier(completionStageSupplier).get().toCompletableFuture().join();
+            serviceInstanceMetrics.recordServiceInstanceCalled(serviceInstance, true);
+            return response;
         } catch (CompletionException e) {
+            serviceInstanceMetrics.recordServiceInstanceCalled(serviceInstance, false);
             //内部抛出的所有异常都被封装了一层 CompletionException，所以这里需要取出里面的 Exception
             Throwable cause = e.getCause();
             //对于断路器打开，返回对应特殊的错误码
@@ -127,6 +137,14 @@ public class Resilience4jFeignClient implements Client {
             }
             throw e;
         }
+    }
+
+    private ServiceInstance getServiceInstance(Request request) throws MalformedURLException {
+        URL url = new URL(request.url());
+        DefaultServiceInstance defaultServiceInstance = new DefaultServiceInstance();
+        defaultServiceInstance.setHost(url.getHost());
+        defaultServiceInstance.setPort(url.getPort());
+        return defaultServiceInstance;
     }
 
     private String getServiceInstanceId(String contextId, Request request) throws MalformedURLException {

@@ -327,42 +327,6 @@ public class OpenFeignClientTest {
         String testPostDelayThreeSeconds();
     }
 
-
-    /**
-     * 验证同一个服务不同实例处于不同线程
-     *
-     * @throws Exception
-     */
-    @Test
-    public void testDifferentInstanceWithDifferentThread() throws Exception {
-        //防止断路器影响
-        circuitBreakerRegistry.getAllCircuitBreakers().asJava().forEach(CircuitBreaker::reset);
-        Thread[] threads = new Thread[100];
-        AtomicBoolean passed = new AtomicBoolean(true);
-        //循环100次
-        for (int i = 0; i < 100; i++) {
-            threads[i] = new Thread(() -> {
-                Span span = tracer.nextSpan();
-                //保证两次调用处于同一个 Span 下，这样一定会调用另一个实例
-                try (Tracer.SpanInScope cleared = tracer.withSpanInScope(span)) {
-                    HttpBinAnythingResponse response = testService1Client.anything();
-                    String threadId1 = response.getHeaders().get(THREAD_ID_HEADER);
-                    response = testService1Client.anything();
-                    String threadId2 = response.getHeaders().get(THREAD_ID_HEADER);
-                    //如果两个不同实例的线程一样，则不通过
-                    if (StringUtils.equalsIgnoreCase(threadId1, threadId2)) {
-                        passed.set(false);
-                    }
-                }
-            });
-            threads[i].start();
-        }
-        for (int i = 0; i < 100; i++) {
-            threads[i].join();
-        }
-        Assertions.assertTrue(passed.get());
-    }
-
     /**
      * 验证不同服务处于不同线程
      *
@@ -439,7 +403,7 @@ public class OpenFeignClientTest {
                 .filter(name -> {
                     try {
                         return name.contains(TestService1Client.class.getMethod("anything").toGenericString())
-                                || name.contains(TestService1Client.class.getMethod("anything").toGenericString());
+                                || name.contains(TestService2Client.class.getMethod("anything").toGenericString());
                     } catch (NoSuchMethodException e) {
                         return false;
                     }

@@ -1,6 +1,7 @@
 package com.github.jojotech.spring.cloud.webmvc.config;
 
 import brave.Tracer;
+import com.github.jojotech.spring.cloud.commons.metric.ServiceInstanceMetrics;
 import com.github.jojotech.spring.cloud.webmvc.feign.ApacheHttpClient;
 import com.github.jojotech.spring.cloud.webmvc.feign.FeignBlockingLoadBalancerClientDelegate;
 import com.github.jojotech.spring.cloud.webmvc.feign.Resilience4jFeignClient;
@@ -58,6 +59,7 @@ public class CommonOpenFeignConfiguration {
     @Bean
     @Primary
     public FeignBlockingLoadBalancerClientDelegate feignBlockingLoadBalancerCircuitBreakableClient(
+            ServiceInstanceMetrics serviceInstanceMetrics,
             ApacheHttpClient apacheHttpClient,
             ObjectProvider<LoadBalancerClient> loadBalancerClientProvider,
             ThreadPoolBulkheadRegistry threadPoolBulkheadRegistry,
@@ -68,7 +70,7 @@ public class CommonOpenFeignConfiguration {
     ) {
         return new FeignBlockingLoadBalancerClientDelegate(
                 new Resilience4jFeignClient(
-                        apacheHttpClient,
+						serviceInstanceMetrics, apacheHttpClient,
                         threadPoolBulkheadRegistry,
                         circuitBreakerRegistry,
                         tracer

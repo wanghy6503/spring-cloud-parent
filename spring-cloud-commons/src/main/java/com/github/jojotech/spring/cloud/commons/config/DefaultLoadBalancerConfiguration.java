@@ -1,9 +1,13 @@
 package com.github.jojotech.spring.cloud.commons.config;
 
 import brave.Tracer;
+import com.codahale.metrics.MetricRegistry;
 import com.github.jojotech.spring.cloud.commons.loadbalancer.RoundRobinWithRequestSeparatedPositionLoadBalancer;
 import com.github.jojotech.spring.cloud.commons.loadbalancer.SameZoneOnlyServiceInstanceListSupplier;
+import com.github.jojotech.spring.cloud.commons.metric.ServiceInstanceMetrics;
+
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass;
 import org.springframework.cloud.client.ServiceInstance;
@@ -88,13 +92,15 @@ public class DefaultLoadBalancerConfiguration {
     public ReactorLoadBalancer<ServiceInstance> reactorServiceInstanceLoadBalancer(
             Environment environment,
             ServiceInstanceListSupplier serviceInstanceListSupplier,
-            Tracer tracer
+            Tracer tracer,
+            ServiceInstanceMetrics serviceInstanceMetrics
     ) {
         String name = environment.getProperty(LoadBalancerClientFactory.PROPERTY_NAME);
         return new RoundRobinWithRequestSeparatedPositionLoadBalancer(
                 serviceInstanceListSupplier,
                 name,
-                tracer
+                tracer,
+                serviceInstanceMetrics
         );
     }
 }
