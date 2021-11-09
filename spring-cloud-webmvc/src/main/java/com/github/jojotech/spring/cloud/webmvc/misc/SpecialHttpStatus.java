@@ -16,6 +16,10 @@ public enum SpecialHttpStatus {
      * 不能重试的异常
      */
     NOT_RETRYABLE_IO_EXCEPTION(583),
+    /**
+     * 超过限流限制
+     */
+    BULKHEAD_FULL(584),
     ;
     private int value;
 

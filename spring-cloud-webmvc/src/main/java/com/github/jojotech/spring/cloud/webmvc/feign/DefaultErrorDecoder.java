@@ -15,6 +15,7 @@ public class DefaultErrorDecoder implements ErrorDecoder {
         boolean queryRequest = OpenfeignUtil.isRetryableRequest(response.request());
         boolean shouldThrowRetryable = queryRequest
                 || response.status() == SpecialHttpStatus.CIRCUIT_BREAKER_ON.getValue()
+                || response.status() == SpecialHttpStatus.BULKHEAD_FULL.getValue()
                 || response.status() == SpecialHttpStatus.RETRYABLE_IO_EXCEPTION.getValue();
         log.info("{} response: {}-{}, should retry: {}", methodKey, response.status(), response.reason(), shouldThrowRetryable);
         //对于查询请求以及可以重试的响应码的异常，进行重试，即抛出可重试异常 RetryableException

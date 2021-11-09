@@ -8,6 +8,7 @@ import com.github.jojotech.spring.cloud.webmvc.misc.SpecialHttpStatus;
 import feign.Client;
 import feign.Request;
 import feign.Response;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.bulkhead.ThreadPoolBulkhead;
 import io.github.resilience4j.bulkhead.ThreadPoolBulkheadRegistry;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
@@ -103,6 +104,14 @@ public class Resilience4jFeignClient implements Client {
             Response response = Try.ofSupplier(completionStageSupplier).get().toCompletableFuture().join();
             serviceInstanceMetrics.recordServiceInstanceCalled(serviceInstance, true);
             return response;
+        } catch (BulkheadFullException e) {
+            //线程池限流异常
+            serviceInstanceMetrics.recordServiceInstanceCalled(serviceInstance, false);
+            return Response.builder()
+                    .request(request)
+                    .status(SpecialHttpStatus.BULKHEAD_FULL.getValue())
+                    .reason(e.getLocalizedMessage())
+                    .requestTemplate(request.requestTemplate()).build();
         } catch (CompletionException e) {
             serviceInstanceMetrics.recordServiceInstanceCalled(serviceInstance, false);
             //内部抛出的所有异常都被封装了一层 CompletionException，所以这里需要取出里面的 Exception
