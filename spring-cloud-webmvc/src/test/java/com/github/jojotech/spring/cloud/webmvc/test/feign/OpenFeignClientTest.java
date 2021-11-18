@@ -5,12 +5,14 @@ import brave.Tracer;
 import com.github.jojotech.spring.cloud.commons.loadbalancer.RoundRobinWithRequestSeparatedPositionLoadBalancer;
 import com.github.jojotech.spring.cloud.webmvc.feign.FeignDecoratorBuilderInterceptor;
 import com.github.jojotech.spring.cloud.webmvc.feign.RetryableMethod;
+import com.google.common.collect.Sets;
 import feign.Request;
 import feign.RetryableException;
 import io.github.resilience4j.bulkhead.ThreadPoolBulkhead;
 import io.github.resilience4j.bulkhead.ThreadPoolBulkheadRegistry;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.core.ConfigurationNotFoundException;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryRegistry;
 import lombok.extern.log4j.Log4j2;
@@ -46,6 +48,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -55,6 +58,7 @@ import static org.mockito.Mockito.when;
 //SpringRunner也包含了MockitoJUnitRunner，所以 @Mock 等注解也生效了
 @ExtendWith(SpringExtension.class)
 @SpringBootTest(properties = {
+        "eureka.client.enabled=false",
         LoadBalancerEurekaAutoConfiguration.LOADBALANCER_ZONE + "=zone1",
         //验证 thread-pool-bulkhead 相关的配置
         "management.endpoints.web.exposure.include=*",
@@ -63,8 +67,10 @@ import static org.mockito.Mockito.when;
         "feign.client.config." + OpenFeignClientTest.CONTEXT_ID_2 + ".readTimeout=4000",
         "resilience4j.thread-pool-bulkhead.configs.default.coreThreadPoolSize=" + OpenFeignClientTest.DEFAULT_THREAD_POOL_SIZE,
         "resilience4j.thread-pool-bulkhead.configs.default.maxThreadPoolSize=" + OpenFeignClientTest.DEFAULT_THREAD_POOL_SIZE,
+        "resilience4j.thread-pool-bulkhead.configs.default.queueCapacity=1" ,
         "resilience4j.thread-pool-bulkhead.configs." + OpenFeignClientTest.CONTEXT_ID_2 + ".coreThreadPoolSize=" + OpenFeignClientTest.TEST_SERVICE_2_THREAD_POOL_SIZE,
         "resilience4j.thread-pool-bulkhead.configs." + OpenFeignClientTest.CONTEXT_ID_2 + ".maxThreadPoolSize=" + OpenFeignClientTest.TEST_SERVICE_2_THREAD_POOL_SIZE,
+        "resilience4j.thread-pool-bulkhead.configs." + OpenFeignClientTest.CONTEXT_ID_2 + ".queueCapacity=1",
         "resilience4j.circuitbreaker.configs.default.failureRateThreshold=" + OpenFeignClientTest.DEFAULT_FAILURE_RATE_THRESHOLD,
         "resilience4j.circuitbreaker.configs.default.slidingWindowType=TIME_BASED",
         "resilience4j.circuitbreaker.configs.default.slidingWindowSize=5",
@@ -110,7 +116,7 @@ public class OpenFeignClientTest {
     @SpyBean
     private RetryRegistry retryRegistry;
 
-    @SpringBootApplication(exclude = EurekaDiscoveryClientConfiguration.class)
+    @SpringBootApplication
     @EnableAspectJAutoProxy(proxyTargetClass = true)
     @Configuration
     public static class App {
@@ -177,7 +183,7 @@ public class OpenFeignClientTest {
             ReflectionUtils.makeAccessible(headers);
             Map<String, Collection<String>> map = (Map<String, Collection<String>>) ReflectionUtils.getField(headers, request);
             HashMap<String, Collection<String>> stringCollectionHashMap = new HashMap<>(map);
-            stringCollectionHashMap.put(THREAD_ID_HEADER, List.of(String.valueOf(Thread.currentThread().getId())));
+            stringCollectionHashMap.put(THREAD_ID_HEADER, List.of(String.valueOf(Thread.currentThread().getName())));
             ReflectionUtils.setField(headers, request, stringCollectionHashMap);
             return pjp.proceed();
         }
@@ -361,6 +367,34 @@ public class OpenFeignClientTest {
         Assertions.assertTrue(passed.get());
     }
 
+    @Test
+    public void testDifferentThreadPoolForDifferentInstance() throws InterruptedException {
+        //防止断路器影响
+        circuitBreakerRegistry.getAllCircuitBreakers().asJava().forEach(CircuitBreaker::reset);
+        Set<String> threadIds = Sets.newConcurrentHashSet();
+        Thread[] threads = new Thread[100];
+        //循环100次
+        for (int i = 0; i < 100; i++) {
+            threads[i] = new Thread(() -> {
+                Span span = tracer.nextSpan();
+                try (Tracer.SpanInScope cleared = tracer.withSpanInScope(span)) {
+                    HttpBinAnythingResponse response = testService1Client.anything();
+                    //因为 anything 会返回我们发送的请求实体的所有内容，所以我们能获取到请求的线程名称 header
+                    String threadId = response.getHeaders().get(THREAD_ID_HEADER);
+                    threadIds.add(threadId);
+                }
+            });
+            threads[i].start();
+        }
+        for (int i = 0; i < 100; i++) {
+            threads[i].join();
+        }
+        //确认实例 testService1Client:httpbin.org:80 线程池的线程存在
+        Assertions.assertTrue(threadIds.stream().anyMatch(s -> s.contains("testService1Client:httpbin.org:80")));
+        //确认实例 testService1Client:httpbin.org:80 线程池的线程存在
+        Assertions.assertTrue(threadIds.stream().anyMatch(s -> s.contains("testService1Client:www.httpbin.org:80")));
+    }
+
     /**
      * 验证配置生效
      */
@@ -372,19 +406,14 @@ public class OpenFeignClientTest {
         testService1Client.anything();
         testService2Client.anything();
         //验证线程隔离的实际配置，符合我们的填入的配置
-        List<ThreadPoolBulkhead> threadPoolBulkheads = threadPoolBulkheadRegistry.getAllBulkheads().asJava();
-        Set<String> collect = threadPoolBulkheads.stream().map(ThreadPoolBulkhead::getName)
-                .filter(name -> name.contains(CONTEXT_ID_1) || name.contains(CONTEXT_ID_2)).collect(Collectors.toSet());
-        Assertions.assertTrue(collect.size() >= 2);
-        threadPoolBulkheads.forEach(threadPoolBulkhead -> {
-            if (threadPoolBulkhead.getName().contains(CONTEXT_ID_1)) {
-                Assertions.assertEquals(threadPoolBulkhead.getBulkheadConfig().getCoreThreadPoolSize(), DEFAULT_THREAD_POOL_SIZE);
-                Assertions.assertEquals(threadPoolBulkhead.getBulkheadConfig().getMaxThreadPoolSize(), DEFAULT_THREAD_POOL_SIZE);
-            } else if (threadPoolBulkhead.getName().contains(CONTEXT_ID_2)) {
-                Assertions.assertEquals(threadPoolBulkhead.getBulkheadConfig().getCoreThreadPoolSize(), TEST_SERVICE_2_THREAD_POOL_SIZE);
-                Assertions.assertEquals(threadPoolBulkhead.getBulkheadConfig().getMaxThreadPoolSize(), TEST_SERVICE_2_THREAD_POOL_SIZE);
-            }
-        });
+        ThreadPoolBulkhead threadPoolBulkhead = threadPoolBulkheadRegistry.getAllBulkheads().asJava()
+                .stream().filter(t -> t.getName().contains(CONTEXT_ID_1)).findFirst().get();
+        Assertions.assertEquals(threadPoolBulkhead.getBulkheadConfig().getCoreThreadPoolSize(), DEFAULT_THREAD_POOL_SIZE);
+        Assertions.assertEquals(threadPoolBulkhead.getBulkheadConfig().getMaxThreadPoolSize(), DEFAULT_THREAD_POOL_SIZE);
+        threadPoolBulkhead = threadPoolBulkheadRegistry.getAllBulkheads().asJava()
+                .stream().filter(t -> t.getName().contains(CONTEXT_ID_2)).findFirst().get();
+        Assertions.assertEquals(threadPoolBulkhead.getBulkheadConfig().getCoreThreadPoolSize(), TEST_SERVICE_2_THREAD_POOL_SIZE);
+        Assertions.assertEquals(threadPoolBulkhead.getBulkheadConfig().getMaxThreadPoolSize(), TEST_SERVICE_2_THREAD_POOL_SIZE);
     }
 
     /**
@@ -453,24 +482,21 @@ public class OpenFeignClientTest {
      */
     @Test
     public void testConfigureRetry() {
-        //防止断路器影响
-        circuitBreakerRegistry.getAllCircuitBreakers().asJava().forEach(CircuitBreaker::reset);
-        //调用下这两个 FeignClient 确保对应的 NamedContext 被初始化
-        testService1Client.anything();
-        testService2Client.anything();
+        //读取所有的 Retry
         List<Retry> retries = retryRegistry.getAllRetries().asJava();
         //验证其中的配置是否符合我们填写的配置
-        Set<String> collect = retries.stream().map(Retry::getName)
-                .filter(name -> name.contains(CONTEXT_ID_1)
-                        || name.contains(CONTEXT_ID_2)).collect(Collectors.toSet());
-        Assertions.assertEquals(collect.size(), 2);
-        retries.forEach(retry -> {
-            if (retry.getName().contains(CONTEXT_ID_1)) {
-                Assertions.assertEquals(retry.getRetryConfig().getMaxAttempts(), DEFAULT_RETRY);
-            } else if (retry.getName().contains(CONTEXT_ID_2)) {
-                Assertions.assertEquals(retry.getRetryConfig().getMaxAttempts(), TEST_SERVICE_2_RETRY);
-            }
-        });
+        Map<String, Retry> retryMap = retries.stream().collect(Collectors.toMap(Retry::getName, v -> v));
+        //我们初始化 Retry 的时候，使用 FeignClient 的 ContextId 作为了 Retry 的 Name
+        Retry retry = retryMap.get(CONTEXT_ID_1);
+        //验证 Retry 配置存在
+        Assertions.assertNotNull(retry);
+        //验证 Retry 配置符合我们的配置
+        Assertions.assertEquals(retry.getRetryConfig().getMaxAttempts(), DEFAULT_RETRY);
+        retry = retryMap.get(CONTEXT_ID_2);
+        //验证 Retry 配置存在
+        Assertions.assertNotNull(retry);
+        //验证 Retry 配置符合我们的配置
+        Assertions.assertEquals(retry.getRetryConfig().getMaxAttempts(), TEST_SERVICE_2_RETRY);
     }
 
     @FeignClient(name = TEST_SERVICE_2, contextId = CONTEXT_ID_2)
@@ -534,6 +560,59 @@ public class OpenFeignClientTest {
                 testService3Client.anything();
                 testService3Client.anything();
             }
+        }
+    }
+
+    @Test
+    public void testRetryOnCircuitBreakerException() {
+        //防止断路器影响
+        circuitBreakerRegistry.getAllCircuitBreakers().asJava().forEach(CircuitBreaker::reset);
+        CircuitBreaker testService1ClientInstance1Anything;
+        try {
+            testService1ClientInstance1Anything = circuitBreakerRegistry
+                    .circuitBreaker("testService1Client:httpbin.org:80:public abstract com.github.jojotech.spring.cloud.webmvc.test.feign.HttpBinAnythingResponse com.github.jojotech.spring.cloud.webmvc.test.feign.OpenFeignClientTest$TestService1Client.anything()", "testService1Client");
+        } catch (ConfigurationNotFoundException e) {
+            //找不到就用默认配置
+            testService1ClientInstance1Anything = circuitBreakerRegistry
+                    .circuitBreaker("testService1Client:httpbin.org:80:public abstract com.github.jojotech.spring.cloud.webmvc.test.feign.HttpBinAnythingResponse com.github.jojotech.spring.cloud.webmvc.test.feign.OpenFeignClientTest$TestService1Client.anything()");
+        }
+        //将断路器打开
+        testService1ClientInstance1Anything.transitionToOpenState();
+        //调用多次，调用成功即对断路器异常重试了
+        for (int i = 0; i < 10; i++) {
+            this.testService1Client.anything();
+        }
+    }
+
+    @Test
+    public void testRetryOnBulkheadException() {
+        //防止断路器影响
+        circuitBreakerRegistry.getAllCircuitBreakers().asJava().forEach(CircuitBreaker::reset);
+        this.testService1Client.anything();
+        ThreadPoolBulkhead threadPoolBulkhead;
+        try {
+            threadPoolBulkhead = threadPoolBulkheadRegistry
+                    .bulkhead("testService1Client:httpbin.org:80", "testService1Client");
+        } catch (ConfigurationNotFoundException e) {
+            //找不到就用默认配置
+            threadPoolBulkhead = threadPoolBulkheadRegistry
+                    .bulkhead("testService1Client:httpbin.org:80");
+        }
+        //线程队列我们配置的是 1，线程池大小是 10，这样会将线程池填充满
+        for (int i = 0; i < DEFAULT_THREAD_POOL_SIZE + 1; i++) {
+            threadPoolBulkhead.submit(() -> {
+                try {
+                    //这样任务永远不会结束了
+                    Thread.currentThread().join();
+                }
+                catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            });
+        }
+        //调用多次，调用成功即对断路器异常重试了
+        for (int i = 0; i < 10; i++) {
+            this.testService1Client.anything();
         }
     }
 
