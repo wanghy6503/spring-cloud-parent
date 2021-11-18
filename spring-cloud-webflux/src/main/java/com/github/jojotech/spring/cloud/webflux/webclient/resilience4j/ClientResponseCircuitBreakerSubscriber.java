@@ -1,9 +1,16 @@
 package com.github.jojotech.spring.cloud.webflux.webclient.resilience4j;
 
+import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import com.github.jojotech.spring.cloud.commons.metric.ServiceInstanceMetrics;
 import com.github.jojotech.spring.cloud.webflux.config.WebClientConfigurationProperties;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.reactor.AbstractSubscriber;
 import lombok.extern.log4j.Log4j2;
+import reactor.core.CoreSubscriber;
+
+import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpRequest;
 import org.springframework.http.HttpStatus;
@@ -11,10 +18,6 @@ import org.springframework.util.ReflectionUtils;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.UnknownHttpStatusCodeException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
-import reactor.core.CoreSubscriber;
-
-import java.lang.reflect.Method;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Objects.requireNonNull;
 
@@ -25,6 +28,8 @@ import static java.util.Objects.requireNonNull;
 @Log4j2
 public class ClientResponseCircuitBreakerSubscriber extends AbstractSubscriber<ClientResponse> {
     private final CircuitBreaker circuitBreaker;
+    private final ServiceInstance serviceInstance;
+    private final ServiceInstanceMetrics serviceInstanceMetrics;
     private final WebClientConfigurationProperties.WebClientProperties webClientProperties;
     private final long start;
     private final boolean singleProducer;
@@ -53,10 +58,12 @@ public class ClientResponseCircuitBreakerSubscriber extends AbstractSubscriber<C
     protected ClientResponseCircuitBreakerSubscriber(
             CircuitBreaker circuitBreaker,
             CoreSubscriber<? super ClientResponse> downstreamSubscriber,
-            boolean singleProducer,
+            ServiceInstance serviceInstance, ServiceInstanceMetrics serviceInstanceMetrics, boolean singleProducer,
             WebClientConfigurationProperties.WebClientProperties webClientProperties) {
         super(downstreamSubscriber);
         this.circuitBreaker = requireNonNull(circuitBreaker);
+        this.serviceInstance = serviceInstance;
+        this.serviceInstanceMetrics = serviceInstanceMetrics;
         this.singleProducer = singleProducer;
         this.start = circuitBreaker.getCurrentTimestamp();
         this.webClientProperties = webClientProperties;
@@ -107,6 +114,7 @@ public class ClientResponseCircuitBreakerSubscriber extends AbstractSubscriber<C
     @Override
     protected void hookOnComplete() {
         if (successSignaled.compareAndSet(false, true)) {
+            serviceInstanceMetrics.recordServiceInstanceCalled(serviceInstance, true);
             circuitBreaker.onSuccess(circuitBreaker.getCurrentTimestamp() - start, circuitBreaker.getTimestampUnit());
         }
 
@@ -116,6 +124,7 @@ public class ClientResponseCircuitBreakerSubscriber extends AbstractSubscriber<C
     @Override
     public void hookOnCancel() {
         if (!successSignaled.get()) {
+            serviceInstanceMetrics.recordServiceInstanceCalled(serviceInstance, true);
             if (eventWasEmitted.get()) {
                 circuitBreaker.onSuccess(circuitBreaker.getCurrentTimestamp() - start, circuitBreaker.getTimestampUnit());
             } else {
@@ -126,6 +135,7 @@ public class ClientResponseCircuitBreakerSubscriber extends AbstractSubscriber<C
 
     @Override
     protected void hookOnError(Throwable e) {
+        serviceInstanceMetrics.recordServiceInstanceCalled(serviceInstance, false);
         circuitBreaker.onError(circuitBreaker.getCurrentTimestamp() - start, circuitBreaker.getTimestampUnit(), e);
         downstreamSubscriber.onError(e);
     }

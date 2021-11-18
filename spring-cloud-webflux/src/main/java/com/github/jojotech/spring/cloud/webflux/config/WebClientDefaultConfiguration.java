@@ -1,6 +1,7 @@
 package com.github.jojotech.spring.cloud.webflux.config;
 
 import com.alibaba.fastjson.JSON;
+import com.github.jojotech.spring.cloud.commons.metric.ServiceInstanceMetrics;
 import com.github.jojotech.spring.cloud.webflux.webclient.WebClientNamedContextFactory;
 import com.github.jojotech.spring.cloud.webflux.webclient.resilience4j.ClientResponseCircuitBreakerOperator;
 import com.github.jojotech.spring.cloud.webflux.webclient.resilience4j.retry.ClientResponseRetryOperator;
@@ -18,12 +19,16 @@ import io.netty.handler.timeout.WriteTimeoutHandler;
 import lombok.extern.log4j.Log4j2;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.BeanCreationException;
+import org.springframework.cloud.client.DefaultServiceInstance;
+import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.loadbalancer.reactive.ReactorLoadBalancerExchangeFilterFunction;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.web.reactive.function.client.ClientRequest;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -41,7 +46,8 @@ public class WebClientDefaultConfiguration {
             WebClientConfigurationProperties webClientConfigurationProperties,
             Environment environment,
             RetryRegistry retryRegistry,
-            CircuitBreakerRegistry circuitBreakerRegistry
+            CircuitBreakerRegistry circuitBreakerRegistry,
+            ServiceInstanceMetrics serviceInstanceMetrics
     ) {
         String name = environment.getProperty(WebClientNamedContextFactory.PROPERTY_NAME);
         Map<String, WebClientConfigurationProperties.WebClientProperties> configs = webClientConfigurationProperties.getConfigs();
@@ -132,6 +138,12 @@ public class WebClientDefaultConfiguration {
         Retry finalRetry = retry;
         String finalServiceName = serviceName;
         return WebClient.builder()
+                .exchangeStrategies(ExchangeStrategies.builder()
+                .codecs(configurer -> configurer
+                        .defaultCodecs()
+                        //最大 body 占用 16m 内存
+                        .maxInMemorySize(16 * 1024 * 1024))
+                .build())
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
                 //Retry在负载均衡前
                 .filter((clientRequest, exchangeFunction) -> {
@@ -143,9 +155,13 @@ public class WebClientDefaultConfiguration {
                 .filter(lbFunction)
                 //实例级别的断路器需要在负载均衡获取真正地址之后
                 .filter((clientRequest, exchangeFunction) -> {
+                    ServiceInstance serviceInstance = getServiceInstance(clientRequest);
+                    serviceInstanceMetrics.recordServiceInstanceCall(serviceInstance);
                     CircuitBreaker circuitBreaker;
                     //这时候的url是经过负载均衡器的，是实例的url
-                    String instancId = clientRequest.url().getHost() + ":" + clientRequest.url().getPort();
+                    //需要注意的一点是，使用异步 client 的时候，最好不要带路径参数，否则这里的断路器效果不好
+                    //断路器是每个实例每个路径一个断路器
+                    String instancId = clientRequest.url().getHost() + ":" + clientRequest.url().getPort() + clientRequest.url().getPath();
                     try {
                         //使用实例id新建或者获取现有的CircuitBreaker,使用serviceName获取配置
                         circuitBreaker = circuitBreakerRegistry.circuitBreaker(instancId, finalServiceName);
@@ -153,9 +169,16 @@ public class WebClientDefaultConfiguration {
                         circuitBreaker = circuitBreakerRegistry.circuitBreaker(instancId);
                     }
                     log.info("webclient circuit breaker [{}-{}] status: {}, data: {}", finalServiceName, instancId, circuitBreaker.getState(), JSON.toJSONString(circuitBreaker.getMetrics()));
-                    return exchangeFunction.exchange(clientRequest).transform(ClientResponseCircuitBreakerOperator.of(circuitBreaker, webClientProperties));
-                })
-                .baseUrl(baseUrl)
+                    return exchangeFunction.exchange(clientRequest).transform(ClientResponseCircuitBreakerOperator.of(circuitBreaker, serviceInstance, serviceInstanceMetrics, webClientProperties));
+                }).baseUrl(baseUrl)
                 .build();
+    }
+
+    private ServiceInstance getServiceInstance(ClientRequest clientRequest) {
+        URI url = clientRequest.url();
+        DefaultServiceInstance defaultServiceInstance = new DefaultServiceInstance();
+        defaultServiceInstance.setHost(url.getHost());
+        defaultServiceInstance.setPort(url.getPort());
+        return defaultServiceInstance;
     }
 }
