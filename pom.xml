@@ -33,6 +33,7 @@
         <!--参考 https://docs.spring.io/spring-boot/docs/2.4.6/reference/htmlsingle/#dependency-versions-properties 可以通过这种方式替换默认的依赖版本-->
         <lettuce.version>6.1.4.RELEASE</lettuce.version>
         <guava.version>30.1.1-jre</guava.version>
+        <spock.version>2.0-groovy-2.5</spock.version>
     </properties>
 
 
@@ -96,6 +97,28 @@
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.codehaus.groovy</groupId>
+            <artifactId>groovy</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/org.spockframework/spock-core -->
+        <dependency>
+            <groupId>org.spockframework</groupId>
+            <artifactId>spock-core</artifactId>
+            <version>${spock.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.spockframework</groupId>
+            <artifactId>spock-spring</artifactId>
+            <version>${spock.version}</version>
             <scope>test</scope>
         </dependency>
         <!--spring-boot单元测试-->
