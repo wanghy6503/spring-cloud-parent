@@ -138,8 +138,8 @@ class WebClientUnitTest extends Specification {
 					cleared.close()
 				}
 			}
-		then:"调用至少 10 次负载均衡器且没有异常即成功"
-			(10.._) * loadBalancerClientFactoryInstance.getInstanceResponseByRoundRobin(*_)
+		then:"调用至少 20 次负载均衡器且没有异常即成功"
+			(20.._) * loadBalancerClientFactoryInstance.getInstanceResponseByRoundRobin(*_)
 	}
 
 	def "测试针对 readTimeout 重试"() {
