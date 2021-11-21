@@ -76,6 +76,8 @@ public class ClientResponseCircuitBreakerSubscriber extends AbstractSubscriber<C
                 int rawStatusCode = clientResponse.rawStatusCode();
                 HttpStatus httpStatus = HttpStatus.resolve(rawStatusCode);
                 try {
+                    //根据结果是否为 2xx 判断成功还是失败，记录到负载均衡器
+                    serviceInstanceMetrics.recordServiceInstanceCalled(serviceInstance, httpStatus != null && httpStatus.is2xxSuccessful());
                     HttpRequest httpRequest = (HttpRequest) request.invoke(clientResponse);
                     //判断方法是否为 GET，以及是否在可重试路径配置中，从而得出是否可以重试
                     if (httpRequest.getMethod() != HttpMethod.GET && !webClientProperties.retryablePathsMatch(httpRequest.getURI().getPath())) {
